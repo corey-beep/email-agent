@@ -183,3 +183,85 @@ Category: {summary.category}
 
 ---
 """
+
+    def _is_deletable(self, email: Email) -> bool:
+        """Use LLM to determine if an email is deletable (low importance)."""
+        prompt = f"""Analyze this email and determine if it is DELETABLE or KEEP.
+
+DELETABLE emails are:
+- Newsletters you probably won't read
+- Marketing/promotional emails
+- Automated notifications that aren't actionable
+- Spam or junk
+- Social media notifications
+- Old/expired offers or events
+
+KEEP emails are:
+- Personal messages from real people
+- Work-related communications
+- Emails requiring action or response
+- Important receipts or confirmations
+- Account security alerts
+
+Only respond with one word: DELETABLE or KEEP
+
+From: {email.sender}
+Subject: {email.subject}
+
+{email.body[:300]}"""
+
+        response = self.llm.chat(prompt).strip().upper()
+        return "DELETABLE" in response
+
+    def find_deletable_emails(self, limit: int = 50) -> dict:
+        """Find deletable emails and group them by sender."""
+        deletable_by_sender = {}
+
+        with self.email_client as client:
+            emails = client.fetch_emails(limit=limit, unread_only=False)
+
+            for email in emails:
+                if self._is_deletable(email):
+                    # Extract sender email/name for grouping
+                    sender = email.sender
+
+                    if sender not in deletable_by_sender:
+                        deletable_by_sender[sender] = []
+
+                    # Get first 10 words of body
+                    words = email.body.split()[:10]
+                    preview = " ".join(words)
+                    if len(words) == 10:
+                        preview += "..."
+
+                    deletable_by_sender[sender].append({
+                        "email": email,
+                        "subject": email.subject,
+                        "preview": preview
+                    })
+
+        return deletable_by_sender
+
+    def delete_email(self, email_id: str) -> bool:
+        """Delete a single email by ID."""
+        with self.email_client as client:
+            try:
+                client.imap.store(email_id.encode(), "+FLAGS", "\\Deleted")
+                client.imap.expunge()
+                return True
+            except Exception as e:
+                print(f"Error deleting email: {e}")
+                return False
+
+    def delete_emails_from_sender(self, email_ids: list) -> int:
+        """Delete multiple emails. Returns count of deleted."""
+        deleted = 0
+        with self.email_client as client:
+            for email_id in email_ids:
+                try:
+                    client.imap.store(email_id.encode(), "+FLAGS", "\\Deleted")
+                    deleted += 1
+                except:
+                    pass
+            client.imap.expunge()
+        return deleted

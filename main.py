@@ -170,6 +170,110 @@ def organize_inbox(agent: EmailAgent):
         console.print(f"[red]Error: {e}[/red]")
 
 
+def clean_inbox(agent: EmailAgent):
+    """Find and delete unimportant emails."""
+    limit = int(Prompt.ask("How many emails to scan?", default="30"))
+
+    console.print("\n[yellow]Analyzing emails for deletable content...[/yellow]")
+    console.print("[dim]This may take a moment as each email is evaluated by the LLM.[/dim]\n")
+
+    try:
+        deletable = agent.find_deletable_emails(limit=limit)
+
+        if not deletable:
+            console.print("[green]No deletable emails found! Your inbox is clean.[/green]")
+            return
+
+        total_deletable = sum(len(emails) for emails in deletable.values())
+        console.print(f"[yellow]Found {total_deletable} deletable email(s) from {len(deletable)} sender(s)[/yellow]\n")
+
+        # Display grouped by sender
+        sender_num = 0
+        sender_map = {}
+
+        for sender, emails in deletable.items():
+            sender_num += 1
+            sender_map[sender_num] = {"sender": sender, "emails": emails}
+
+            table = Table(title=f"[bold]Sender {sender_num}:[/bold] {sender[:60]}", show_header=True)
+            table.add_column("#", style="bold", width=4)
+            table.add_column("Subject", width=40)
+            table.add_column("Preview", width=50)
+
+            for i, email_data in enumerate(emails, 1):
+                table.add_row(
+                    f"{sender_num}.{i}",
+                    email_data["subject"][:40],
+                    email_data["preview"][:50]
+                )
+
+            console.print(table)
+            console.print("")
+
+        # Action menu
+        while True:
+            console.print("[bold]Actions:[/bold]")
+            console.print("  [cyan]<sender#>[/cyan]        - Delete all from that sender (e.g., '1')")
+            console.print("  [cyan]<sender#.email#>[/cyan] - Delete single email (e.g., '1.2')")
+            console.print("  [cyan]all[/cyan]             - Delete all deletable emails")
+            console.print("  [cyan]done[/cyan]            - Exit cleanup")
+
+            action = Prompt.ask("\nAction").strip().lower()
+
+            if action == "done":
+                break
+
+            elif action == "all":
+                if Confirm.ask(f"[red]Delete ALL {total_deletable} emails?[/red]", default=False):
+                    deleted = 0
+                    for sender_data in sender_map.values():
+                        ids = [e["email"].id for e in sender_data["emails"]]
+                        deleted += agent.delete_emails_from_sender(ids)
+                    console.print(f"[green]Deleted {deleted} email(s)[/green]")
+                    break
+
+            elif "." in action:
+                # Single email delete (e.g., "1.2")
+                try:
+                    sender_num, email_num = map(int, action.split("."))
+                    if sender_num in sender_map:
+                        emails = sender_map[sender_num]["emails"]
+                        if 1 <= email_num <= len(emails):
+                            email_data = emails[email_num - 1]
+                            if Confirm.ask(f"Delete '{email_data['subject'][:40]}'?", default=True):
+                                if agent.delete_email(email_data["email"].id):
+                                    console.print("[green]Deleted![/green]")
+                                    emails.pop(email_num - 1)
+                                else:
+                                    console.print("[red]Failed to delete[/red]")
+                        else:
+                            console.print("[red]Invalid email number[/red]")
+                    else:
+                        console.print("[red]Invalid sender number[/red]")
+                except ValueError:
+                    console.print("[red]Invalid format. Use sender#.email# (e.g., 1.2)[/red]")
+
+            else:
+                # Delete all from sender (e.g., "1")
+                try:
+                    sender_num = int(action)
+                    if sender_num in sender_map:
+                        sender_data = sender_map[sender_num]
+                        count = len(sender_data["emails"])
+                        if Confirm.ask(f"Delete all {count} email(s) from {sender_data['sender'][:40]}?", default=True):
+                            ids = [e["email"].id for e in sender_data["emails"]]
+                            deleted = agent.delete_emails_from_sender(ids)
+                            console.print(f"[green]Deleted {deleted} email(s)[/green]")
+                            del sender_map[sender_num]
+                    else:
+                        console.print("[red]Invalid sender number[/red]")
+                except ValueError:
+                    console.print("[red]Invalid input[/red]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
 def main_menu():
     """Show main menu and handle user input."""
     agent = EmailAgent()
@@ -186,10 +290,11 @@ def main_menu():
         console.print("2. Browse inbox")
         console.print("3. Draft a reply")
         console.print("4. Organize inbox")
-        console.print("5. Check status")
-        console.print("6. Exit")
+        console.print("5. [red]Clean inbox[/red] (find & delete junk)")
+        console.print("6. Check status")
+        console.print("7. Exit")
 
-        choice = Prompt.ask("\nChoice", choices=["1", "2", "3", "4", "5", "6"])
+        choice = Prompt.ask("\nChoice", choices=["1", "2", "3", "4", "5", "6", "7"])
 
         if choice == "1":
             show_digest(agent)
@@ -200,8 +305,10 @@ def main_menu():
         elif choice == "4":
             organize_inbox(agent)
         elif choice == "5":
-            check_status(agent)
+            clean_inbox(agent)
         elif choice == "6":
+            check_status(agent)
+        elif choice == "7":
             console.print("\n[dim]Goodbye![/dim]")
             break
 
